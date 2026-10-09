@@ -15,36 +15,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATA_FILE = Path(__file__).resolve().parent.parent / "q-vercel-latency.json"
-
-
-def load_records():
-    with open(DATA_FILE, "r", encoding="utf-8") as file:
-        data = json.load(file)
-
-    if isinstance(data, list):
-        return data
-
-    for key in ("data", "records", "telemetry"):
-        if isinstance(data, dict) and isinstance(data.get(key), list):
-            return data[key]
-
-    raise ValueError("Could not find the telemetry records list")
-
-
-def get_value(record, possible_names):
-    for name in possible_names:
-        if name in record:
-            return record[name]
-    raise ValueError("Missing field: " + possible_names[0])
+# Keep the JSON dataset inside the api folder
+DATA_FILE = Path(__file__).parent / "q-vercel-latency.json"
 
 
 def percentile_95(values):
     values = sorted(values)
-
-    if len(values) == 1:
-        return values[0]
-
     position = 0.95 * (len(values) - 1)
     lower = math.floor(position)
     upper = math.ceil(position)
@@ -61,17 +37,15 @@ async def analyse(request: Request):
         regions = body["regions"]
         threshold = float(body["threshold_ms"])
 
-        if not isinstance(regions, list):
-            raise ValueError("'regions' must be a list")
+        with open(DATA_FILE, "r", encoding="utf-8") as file:
+            records = json.load(file)
 
-        records = load_records()
         results = {}
 
         for region in regions:
             selected = [
                 row for row in records
-                if str(get_value(row, ["region"])).lower()
-                == str(region).lower()
+                if row["region"].lower() == region.lower()
             ]
 
             if not selected:
@@ -81,17 +55,10 @@ async def analyse(request: Request):
                 )
 
             latencies = [
-                float(get_value(row, [
-                    "latency_ms", "latency", "response_time_ms"
-                ]))
-                for row in selected
+                float(row["latency_ms"]) for row in selected
             ]
-
             uptimes = [
-                float(get_value(row, [
-                    "uptime", "uptime_percent", "uptime_pct"
-                ]))
-                for row in selected
+                float(row["uptime_pct"]) for row in selected
             ]
 
             results[region] = {
@@ -99,7 +66,7 @@ async def analyse(request: Request):
                 "p95_latency": percentile_95(latencies),
                 "avg_uptime": sum(uptimes) / len(uptimes),
                 "breaches": sum(
-                    latency > threshold for latency in latencies
+                    value > threshold for value in latencies
                 ),
             }
 
@@ -108,7 +75,4 @@ async def analyse(request: Request):
     except HTTPException:
         raise
     except Exception as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error)
-        )
+        raise HTTPException(status_code=400, detail=str(error))
