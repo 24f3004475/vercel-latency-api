@@ -74,7 +74,7 @@ async def analyze(request: Request):
         ]
 
         uptimes = [
-            float(row["uptime"]) for row in rows
+            float(row["uptime_pct"]) for row in rows
         ]
 
         result[region] = {
