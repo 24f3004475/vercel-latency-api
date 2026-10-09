@@ -15,13 +15,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Keep the JSON dataset inside the api folder
 DATA_FILE = Path(__file__).parent / "q-vercel-latency.json"
 
 
-def percentile_95(values):
+def percentile(values, percent):
     values = sorted(values)
-    position = 0.95 * (len(values) - 1)
+
+    if len(values) == 1:
+        return values[0]
+
+    position = (len(values) - 1) * percent / 100
     lower = math.floor(position)
     upper = math.ceil(position)
 
@@ -31,48 +34,56 @@ def percentile_95(values):
 
 
 @app.post("/")
-async def analyse(request: Request):
+async def analyze(request: Request):
+    body = await request.json()
+
+    regions = body.get("regions", [])
+    threshold = body.get("threshold_ms", 180)
+
     try:
-        body = await request.json()
-        regions = body["regions"]
-        threshold = float(body["threshold_ms"])
-
         with open(DATA_FILE, "r", encoding="utf-8") as file:
-            records = json.load(file)
+            data = json.load(file)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not load telemetry data"
+        )
 
-        results = {}
+    # The sample file's structure must match this code.
+    records = data if isinstance(data, list) else data.get("records", [])
 
-        for region in regions:
-            selected = [
-                row for row in records
-                if row["region"].lower() == region.lower()
-            ]
+    result = {}
 
-            if not selected:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No records found for {region}"
-                )
+    for region in regions:
+        rows = [
+            row for row in records
+            if row.get("region", "").lower() == region.lower()
+        ]
 
-            latencies = [
-                float(row["latency_ms"]) for row in selected
-            ]
-            uptimes = [
-                float(row["uptime_pct"]) for row in selected
-            ]
-
-            results[region] = {
-                "avg_latency": sum(latencies) / len(latencies),
-                "p95_latency": percentile_95(latencies),
-                "avg_uptime": sum(uptimes) / len(uptimes),
-                "breaches": sum(
-                    value > threshold for value in latencies
-                ),
+        if not rows:
+            result[region] = {
+                "avg_latency": None,
+                "p95_latency": None,
+                "avg_uptime": None,
+                "breaches": 0
             }
+            continue
 
-        return results
+        latencies = [
+            float(row["latency_ms"]) for row in rows
+        ]
 
-    except HTTPException:
-        raise
-    except Exception as error:
-        raise HTTPException(status_code=400, detail=str(error))
+        uptimes = [
+            float(row["uptime"]) for row in rows
+        ]
+
+        result[region] = {
+            "avg_latency": sum(latencies) / len(latencies),
+            "p95_latency": percentile(latencies, 95),
+            "avg_uptime": sum(uptimes) / len(uptimes),
+            "breaches": sum(
+                latency > threshold for latency in latencies
+            )
+        }
+
+    return result
