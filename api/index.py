@@ -40,6 +40,7 @@ def percentile(values, percent):
 
 
 @app.post("/")
+@app.post("/api/latency")
 async def analyze(request: Request):
     body = await request.json()
 
